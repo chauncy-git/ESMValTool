@@ -35,6 +35,11 @@ diagnostics:
     variables:
       mrsos: # moisture_content_of_soil_layer
         mip: Lmon
+      sm: # Volumetric Moisture in Upper Portion of Soil Column
+        mip: Lmon
+        derive: true
+        additional_datasets:
+            - {dataset: ESACCI-SOILMOISTURE, project: OBS, type: sat, version: L3S-SSMV-COMBINED-v4.2, tier: 2, 'start_year': 2005, 'end_year': 2007}
     scripts:
       autoassess_landsurf_soilmoisture: &autoassess_landsurf_soilmoisture_settings
         script: autoassess/autoassess_area_base.py

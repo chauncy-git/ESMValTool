@@ -61,13 +61,10 @@ def land_sm_top(run):
     metrics = dict()
     for season in seasons:
         fname = 'ecv_soil_moisture_{}.nc'.format(season)
-        clim_file = os.path.join(run['climfiles_root'], fname)
-        ecv_clim = iris.load_cube(clim_file)
-        # correct invalid units
-        if (ecv_clim.units == 'unknown' and
-                'invalid_units' in ecv_clim.attributes):
-            if ecv_clim.attributes['invalid_units'] == 'm^3m^-3':
-                ecv_clim.units = 'm3 m-3'
+
+        ecv_clim = get_supermean(
+            'Volumetric Moisture in Upper Portion of Soil Column', season,
+            run['clim_root'], obs_flag='ESACCI-SOILMOISTURE')
 
         # m01s08i223
         # CMOR name: mrsos (soil moisture in top model layer kg/m2)
