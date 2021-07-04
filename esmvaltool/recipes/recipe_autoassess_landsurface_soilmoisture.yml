@@ -45,7 +45,7 @@ diagnostics:
         obs_models: []
         start: 1993/12/01
         end: 2002/12/01
-        climfiles_root: '/gws/nopw/j04/esmeval/autoassess_specific_files/files'  # on JASMIN
+        climfiles_root: '/gws/nopw/j04/esmeval/autoassess_specific_files/hide'  # on JASMIN
 
   plot_standard:
     description: Wrapper to collect and plot previously calculated metrics
