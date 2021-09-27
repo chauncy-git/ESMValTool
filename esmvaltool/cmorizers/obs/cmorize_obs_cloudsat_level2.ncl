@@ -40,7 +40,9 @@
 ; to monthly means. Precipitating gridboxes are identified using the CloudSat
 ; level 2 data for column precipitation (2C_PRECIP_COLUMN). The CloudSat data
 ; are converted from kg/m3 to kg/kg using the air density from the US
-; standard atmosphere. The script calculates four datasets:
+; standard atmosphere. In addition, liquid and ice water path are binned onto
+; the same spatial grid. The script calculates four types of datasets for the
+; 3-dim cloud liquid water content, liquid water path, ice water path:
 ;
 ;   1) in-cloud values averaged over all available data points
 ;   2) in-cloud values averaged over all data points for which no
@@ -50,8 +52,9 @@
 ;   4) grid-box averages calculated over all data points for which no
 ;      precipitation has been detected
 ;
-; The results are written to four different output files: 1) in-cloud-all,
-; 2) in-cloud-noprecip, 3) gridbox-average, 4) gridbox-average-noprecip.
+; The results for each variable are written to four different output files:
+; 1) in-cloud-all, 2) in-cloud-noprecip, 3) gridbox-average,
+; 4) gridbox-average-noprecip.
 ;
 ; Note: one year of data consists of approximately 110 GB and 10,000 files.
 ;       Processing one year takes about 5-6 hours. It is therefore recommended
@@ -60,6 +63,7 @@
 ;       "year2" (last year).
 ;
 ; Modification history
+;    20210924-lauer_axel: added processing of lwp and iwp
 ;    20201119-lauer_axel: allowing more flexible filenames for precipitation
 ;                         data
 ;    20201117-lauer_axel: code completely rewritten to reduce cpu time per
@@ -91,10 +95,13 @@ begin
   end if
 
   ; output variable (standard name)
-  outvar = "clw"
+  outvar = (/"clw", "lwp", "clivi"/)
 
   ; input variables
-  var = "LO_RO_liquid_water_content_2B_CWC_RO"
+  var = (/"LO_RO_liquid_water_content_2B_CWC_RO", \
+          "LO_RO_liquid_water_path_2B_CWC_RO",    \
+          "IO_RO_ice_water_path_2B_CWC_RO"/)
+
   var_flag = "Precip_flag_2C_PRECIP_COLUMN"
 
   ; MIP
@@ -104,7 +111,11 @@ begin
   freq = "mon"
 
   ; CMOR table
-  CMOR_TABLE = getenv("cmor_tables") + "/cmip5/Tables/CMIP5_" + mip
+
+  CMOR_TABLE = getenv("cmor_tables") + \
+    (/"/cmip5/Tables/CMIP5_" + mip, \
+      "/custom/CMOR_lwp.dat", \
+      "/cmip5/Tables/CMIP5_" + mip/)
 
   ; Type
   type = "sat"
@@ -137,8 +148,6 @@ begin
 
   ; define output longitudes and latitudes
 
-;  gridlon = fspan(dx / 2., 360. - dx / 2., nx)
-;  gridlat = fspan(-90. + dy / 2., 90. - dy / 2., ny)
   gridlat = latGlobeFo(ny, "lat", "latitude", "degrees_north")
   gridlon = lonGlobeFo(nx, "lon", "longitude", "degrees_east")
 
@@ -153,17 +162,26 @@ begin
   grid = new((/nt, nz, ny, nx/), float)
   gridpts = new((/nt, nz, ny, nx/), integer)
 
+  grid2d = new((/nt, 2, ny, nx/), float)
+  gridpts2d = new((/nt, 2, ny, nx/), integer)
+
   ; "grid-box average" (all points)
   grid_avg = new((/nt, nz, ny, nx/), float)
   gridpts_avg = new((/nt, nz, ny, nx/), integer)
+  grid2d_avg = new((/nt, 2, ny, nx/), float)
+  gridpts2d_avg = new((/nt, 2, ny, nx/), integer)
 
   ; "in-cloud" (no precipitation)
   grid_noprecip = new((/nt, nz, ny, nx/), float)
   gridpts_noprecip = new((/nt, nz, ny, nx/), integer)
+  grid2d_noprecip = new((/nt, 2, ny, nx/), float)
+  gridpts2d_noprecip = new((/nt, 2, ny, nx/), integer)
 
   ; "grid-box average" (no precipitation)
   grid_avg_noprecip = new((/nt, nz, ny, nx/), float)
   gridpts_avg_noprecip = new((/nt, nz, ny, nx/), integer)
+  grid2d_avg_noprecip = new((/nt, 2, ny, nx/), float)
+  gridpts2d_avg_noprecip = new((/nt, 2, ny, nx/), integer)
 
   ; boundaries of vertical (height) bins
 
@@ -189,9 +207,20 @@ begin
   grid!3 = "lon"
   grid&lon = gridlon
 
+  grid2d!0 = "time"
+  grid2d!2 = "lat"
+  grid2d&lat = gridlat
+  grid2d!3 = "lon"
+  grid2d&lon = gridlon
+
   copy_VarMeta(grid, grid_avg)
   copy_VarMeta(grid, grid_noprecip)
   copy_VarMeta(grid, grid_avg_noprecip)
+
+  copy_VarMeta(grid2d, grid2d_avg)
+  copy_VarMeta(grid2d, grid2d_noprecip)
+  copy_VarMeta(grid2d, grid2d_avg_noprecip)
+
 end
 
 begin
@@ -202,10 +231,20 @@ begin
     grid_noprecip = 0.
     grid_avg_noprecip = 0.
 
+    grid2d = 0.
+    grid2d_avg = 0.
+    grid2d_noprecip = 0.
+    grid2d_avg_noprecip = 0.
+
     gridpts = 0
     gridpts_avg = 0
     gridpts_noprecip = 0
     gridpts_avg_noprecip = 0
+
+    gridpts2d = 0
+    gridpts2d_avg = 0
+    gridpts2d_noprecip = 0
+    gridpts2d_avg_noprecip = 0
 
     ; create time variable
     gridtime = create_timec(calyear, calyear)
@@ -214,6 +253,11 @@ begin
     grid_avg&time = gridtime
     grid_noprecip&time = gridtime
     grid_avg_noprecip&time = gridtime
+
+    grid2d&time = gridtime
+    grid2d_avg&time = gridtime
+    grid2d_noprecip&time = gridtime
+    grid2d_avg_noprecip&time = gridtime
 
     inpath = input_dir_path + tostring(calyear) + "/"
 
@@ -287,10 +331,22 @@ begin
         print("processing " + fs(orbit) + " + " + fs_precip + "...")
 
         f = addfile(slink1, "r")
-        x2d = f->$var$
+        x2d = f->$var(0)$
 
         if (isatt(x2d, "_FillValue")) then
           delete(x2d@_FillValue)
+        end if
+
+        l1d = f->$var(1)$
+
+        if (isatt(l1d, "_FillValue")) then
+          delete(l1d@_FillValue)
+        end if
+
+        i1d = f->$var(2)$
+
+        if (isatt(i1d, "_FillValue")) then
+          delete(i1d@_FillValue)
         end if
 
         f_precip = addfile(slink2, "r")
@@ -326,13 +382,13 @@ begin
         delete(x2d)
 
         x_flag_ext = ndtooned(conform_dims(dimx, x_flag, 0))
-        delete(x_flag)
 
         lon_ext = ndtooned(conform_dims(dimx, lon, 0))
         lat_ext = ndtooned(conform_dims(dimx, lat, 0))
 
-        delete(lat)
-        delete(lon)
+        ; =========================
+        ; 3-dim cloud water content
+        ; =========================
 
         do ilev = 0, nz - 1
           ; Find all elements that are within a given height level
@@ -428,6 +484,104 @@ begin
         delete(lat_ext)
         delete(lon_ext)
         delete(hgt1d)
+
+        ; ===================================
+        ; 2-dim cloud liquid / ice water path
+        ; ===================================
+
+        do ivar = 1, 2
+          if (outvar(ivar) .eq. "lwp") then
+            x = l1d
+            ilev = 0
+          else if (outvar(ivar) .eq. "clivi") then
+            x = i1d
+            ilev = 1
+          else
+            log_info("Warning: output variable unknown: " + outvar(ivar) + \
+                     ", skipping variable " + outvar(ivar) + ".")
+            continue
+          end if
+          end if
+
+          ; Find all elements that contain valid (x > 0) or missing (x = 0)
+          ; values; invalid values (x < 0) are filtered out.
+          ii = ind(x .ge. 0.)
+          ; check if there are input data for given output gridbox
+          if (.not. ismissing(ii(0))) then
+            xselected = x(ii)
+            xlon = lon(ii)
+            xlat = lat(ii)
+            x_flag_selected = x_flag(ii)
+            ; *** gridbox average, all ***
+            ; Includes all points with missing lwp
+            ; content (x = 0) when calculating the average. This assumes
+            ; that all grid points with "missing" but not invalid values
+            ; are cloud-free. Invalid values (x < 0) are filtered out.
+            bin_sum(work, workpts, gridlon, gridlat, xlon, xlat, xselected)
+            grid2d_avg(itime, ilev, :, :) = \
+              grid2d_avg(itime, ilev, :, :) + work
+            gridpts2d_avg(itime, ilev, :, :) = \
+              gridpts2d_avg(itime, ilev, :, :) + workpts
+            work = 0.
+            workpts = 0
+            ; *** in-cloud average, all ***
+            ; Filter invalid (x < 0) and missing values (x = 0).
+            idx = ind(xselected .gt. 0.)
+            if (.not. ismissing(idx(0))) then
+              bin_sum(work, workpts, gridlon, gridlat, \
+                      xlon(idx), xlat(idx), xselected(idx))
+              grid2d(itime, ilev, :, :) = grid2d(itime, ilev, :, :) + work
+              gridpts2d(itime, ilev, :, :) = gridpts2d(itime, ilev, :, :) \
+                + workpts
+              work = 0.
+              workpts = 0
+            end if
+            delete(idx)
+            ; *** gridbox average, no precipitation ***
+            ; Filter cases that have been flagged with
+            ; precipitation or as unknown.
+            idx = ind(x_flag_selected .eq. 0)
+            if (.not. ismissing(idx(0))) then
+              bin_sum(work, workpts, gridlon, gridlat, \
+                      xlon(idx), xlat(idx), xselected(idx))
+              grid2d_avg_noprecip(itime, ilev, :, :) = \
+                grid2d_avg_noprecip(itime, ilev, :, :) + work
+              gridpts2d_avg_noprecip(itime, ilev, :, :) = \
+                gridpts2d_avg_noprecip(itime, ilev, :, :) + workpts
+              work = 0.
+              workpts = 0
+            end if
+            delete(idx)
+            ; *** in-cloud average, no precipitation ***
+            ; Filter cases that have been flagged with
+            ; precipitation or as unknown.
+            idx = ind((xselected .gt. 0.) .and. (x_flag_selected .eq. 0))
+            if (.not. ismissing(idx(0))) then
+              bin_sum(work, workpts, gridlon, gridlat, \
+                      xlon(idx), xlat(idx), xselected(idx))
+              grid2d_noprecip(itime, ilev, :, :) = \
+                grid2d_noprecip(itime, ilev, :, :) + work
+              gridpts2d_noprecip(itime, ilev, :, :) = \
+                gridpts2d_noprecip(itime, ilev, :, :) + workpts
+              work = 0.
+              workpts = 0
+            end if
+            delete(idx)
+
+            delete(xselected)
+            delete(x_flag_selected)
+            delete(xlon)
+            delete(xlat)
+          end if
+          delete(ii)
+        end do  ; loop over implemented 2-dim variables (lwp, iwp)
+
+        delete(x)
+        delete(x_flag)
+        delete(lat)
+        delete(lon)
+        delete(l1d)
+        delete(i1d)
 ;        delete(time)
 
         ; remove temporary symbolic links
@@ -440,6 +594,10 @@ begin
       end do  ; loop over all orbits per day
       delete(fs)
     end do  ; loop over days
+
+    ; =========================
+    ; 3-dim cloud water content
+    ; =========================
 
     ; calculate monthly averages
 
@@ -478,8 +636,8 @@ begin
 
     format_coords(grid, calyear + "0101", calyear + "1231", freq)
     ; Set variable attributes
-    output = format_variable(grid, outvar, CMOR_TABLE)
-    delete(grid)
+    output = format_variable(grid, outvar(0), CMOR_TABLE(0))
+;    delete(grid)
     ; Set global attributes
     comment = "Liquid-only Radar-only Liquid Water Content (in-cloud, all)"
     gAtt = set_global_atts(obsname, tier, source, ref, comment)
@@ -487,9 +645,9 @@ begin
     datestr = calyear + "01-" + calyear + "12"
     fout = output_dir_path + \
       str_join((/"OBS", obsname, type, version + "-in-cloud-all", \
-                 mip, outvar, datestr/), "_") + ".nc"
+                 mip, outvar(0), datestr/), "_") + ".nc"
     ; write variable
-    write_nc(fout, outvar, output, bounds, gAtt)
+    write_nc(fout, outvar(0), output, bounds, gAtt)
     delete(output)
     delete(gAtt)
 
@@ -497,8 +655,7 @@ begin
 
     format_coords(grid_avg, calyear + "0101", calyear + "1231", freq)
     ; Set variable attributes
-    output = format_variable(grid_avg, outvar, CMOR_TABLE)
-    delete(grid_avg)
+    output = format_variable(grid_avg, outvar(0), CMOR_TABLE(0))
     ; Set global attributes
     comment = "Liquid-only Radar-only Liquid Water Content " \
       + "(gridbox average, all)"
@@ -507,9 +664,9 @@ begin
     datestr = calyear + "01-" + calyear + "12"
     fout = output_dir_path + \
       str_join((/"OBS", obsname, type, version + "-gridbox-average-all", \
-                 mip, outvar, datestr/), "_") + ".nc"
+                 mip, outvar(0), datestr/), "_") + ".nc"
     ; write variable
-    write_nc(fout, outvar, output, bounds, gAtt)
+    write_nc(fout, outvar(0), output, bounds, gAtt)
     delete(output)
     delete(gAtt)
 
@@ -517,8 +674,7 @@ begin
 
     format_coords(grid_noprecip, calyear + "0101", calyear + "1231", freq)
     ; Set variable attributes
-    output = format_variable(grid_noprecip, outvar, CMOR_TABLE)
-    delete(grid_noprecip)
+    output = format_variable(grid_noprecip, outvar(0), CMOR_TABLE(0))
     ; Set global attributes
     comment = "Liquid-only Radar-only Liquid Water Content " \
       + "(in-cloud, no precipitation)"
@@ -527,9 +683,9 @@ begin
     datestr = calyear + "01-" + calyear + "12"
     fout = output_dir_path + \
       str_join((/"OBS", obsname, type, version + "-in-cloud-noprecip", \
-                 mip, outvar, datestr/), "_") + ".nc"
+                 mip, outvar(0), datestr/), "_") + ".nc"
     ; write variable
-    write_nc(fout, outvar, output, bounds, gAtt)
+    write_nc(fout, outvar(0), output, bounds, gAtt)
     delete(output)
     delete(gAtt)
 
@@ -537,8 +693,7 @@ begin
 
     format_coords(grid_avg_noprecip, calyear + "0101", calyear + "1231", freq)
     ; Set variable attributes
-    output = format_variable(grid_avg_noprecip, outvar, CMOR_TABLE)
-    delete(grid_avg_noprecip)
+    output = format_variable(grid_avg_noprecip, outvar(0), CMOR_TABLE(0))
     ; Set global attributes
     comment = "Liquid-only Radar-only Liquid Water Content " \
       + "(gridbox average, no precipitation)"
@@ -547,12 +702,141 @@ begin
     datestr = calyear + "01-" + calyear + "12"
     fout = output_dir_path + \
       str_join((/"OBS", obsname, type, version + "-gridbox-average-noprecip", \
-                 mip, outvar, datestr/), "_") + ".nc"
+                 mip, outvar(0), datestr/), "_") + ".nc"
     ; write variable
-    write_nc(fout, outvar, output, bounds, gAtt)
+    write_nc(fout, outvar(0), output, bounds, gAtt)
     delete(output)
     delete(gAtt)
 
+    ; ===================================
+    ; 2-dim cloud liquid / ice water path
+    ; ===================================
+
+    ; calculate monthly averages
+
+    gridpts2d = where(gridpts2d .eq. 0, gridpts2d@_FillValue, gridpts2d)
+    gridpts2d_avg = where(gridpts2d_avg .eq. 0, gridpts2d_avg@_FillValue, \
+                          gridpts2d_avg)
+    gridpts2d_noprecip = where(gridpts2d_noprecip .eq. 0, \
+                               gridpts2d_noprecip@_FillValue, \
+                               gridpts2d_noprecip)
+    gridpts2d_avg_noprecip = where(gridpts2d_avg_noprecip .eq. 0, \
+                                   gridpts2d_avg_noprecip@_FillValue, \
+                                   gridpts2d_avg_noprecip)
+
+    grid2d = grid2d / gridpts2d
+    grid2d_avg = grid2d_avg / gridpts2d_avg
+    grid2d_noprecip = grid2d_noprecip / gridpts2d_noprecip
+    grid2d_avg_noprecip = grid2d_avg_noprecip / gridpts2d_avg_noprecip
+
+    ; convert from g/m2 to kg/m2
+
+    grid2d = grid2d * 1.e-3
+    grid2d_avg = grid2d_avg * 1.e-3
+    grid2d_noprecip = grid2d_noprecip * 1.e-3
+    grid2d_avg_noprecip = grid2d_avg_noprecip * 1.e-3
+
+    ; ------------------------------------------------------------------------
+
+    ; save results to files
+
+    do ivar = 1, 2
+      if (outvar(ivar) .eq. "lwp") then
+        ilev = 0
+      else if (outvar(ivar) .eq. "clivi") then
+        ilev = 1
+      end if
+      end if
+
+      out_grid = grid2d(:, ilev, :, :)
+      out_grid_avg = grid2d_avg(:, ilev, :, :)
+      out_grid_noprecip = grid2d_noprecip(:, ilev, :, :)
+      out_grid_avg_noprecip = grid2d_avg_noprecip(:, ilev, :, :)
+
+      ; calculate coordinate bounds
+      bounds = guess_coord_bounds(out_grid, freq)
+
+      ; *** in-cloud, all ***
+
+      format_coords(out_grid, calyear + "0101", calyear + "1231", freq)
+      ; Set variable attributes
+      output = format_variable(out_grid, outvar(ivar), CMOR_TABLE(ivar))
+      delete(out_grid)
+      ; Set global attributes
+      comment = "Liquid-only Radar-only Liquid Water Content (in-cloud, all)"
+      gAtt = set_global_atts(obsname, tier, source, ref, comment)
+      ; output filename
+      datestr = calyear + "01-" + calyear + "12"
+      fout = output_dir_path + \
+        str_join((/"OBS", obsname, type, version + "-in-cloud-all", \
+                   mip, outvar(ivar), datestr/), "_") + ".nc"
+      ; write variable
+      write_nc(fout, outvar(ivar), output, bounds, gAtt)
+      delete(output)
+      delete(gAtt)
+
+    ; *** gridbox average, all ***
+
+    format_coords(out_grid_avg, calyear + "0101", calyear + "1231", freq)
+    ; Set variable attributes
+    output = format_variable(out_grid_avg, outvar(ivar), CMOR_TABLE(ivar))
+    delete(out_grid_avg)
+    ; Set global attributes
+    comment = "Liquid-only Radar-only Liquid Water Content " \
+      + "(gridbox average, all)"
+    gAtt = set_global_atts(obsname, tier, source, ref, comment)
+    ; output filename
+    datestr = calyear + "01-" + calyear + "12"
+    fout = output_dir_path + \
+      str_join((/"OBS", obsname, type, version + "-gridbox-average-all", \
+                 mip, outvar(ivar), datestr/), "_") + ".nc"
+    ; write variable
+    write_nc(fout, outvar(ivar), output, bounds, gAtt)
+    delete(output)
+    delete(gAtt)
+
+    ; *** in-cloud, no precipitation only ***
+
+    format_coords(out_grid_noprecip, calyear + "0101", calyear + "1231", freq)
+    ; Set variable attributes
+    output = format_variable(out_grid_noprecip, outvar(ivar), CMOR_TABLE(ivar))
+    delete(out_grid_noprecip)
+    ; Set global attributes
+    comment = "Liquid-only Radar-only Liquid Water Content " \
+      + "(in-cloud, no precipitation)"
+    gAtt = set_global_atts(obsname, tier, source, ref, comment)
+    ; output filename
+    datestr = calyear + "01-" + calyear + "12"
+    fout = output_dir_path + \
+      str_join((/"OBS", obsname, type, version + "-in-cloud-noprecip", \
+                 mip, outvar(ivar), datestr/), "_") + ".nc"
+    ; write variable
+    write_nc(fout, outvar(ivar), output, bounds, gAtt)
+    delete(output)
+    delete(gAtt)
+
+    ; *** gridbox average, no precipitation only ***
+
+    format_coords(out_grid_avg_noprecip, calyear + "0101", calyear + "1231", \
+                  freq)
+    ; Set variable attributes
+    output = format_variable(out_grid_avg_noprecip, outvar(ivar), \
+                             CMOR_TABLE(ivar))
+    delete(out_grid_avg_noprecip)
+    ; Set global attributes
+    comment = "Liquid-only Radar-only Liquid Water Content " \
+      + "(gridbox average, no precipitation)"
+    gAtt = set_global_atts(obsname, tier, source, ref, comment)
+    ; output filename
+    datestr = calyear + "01-" + calyear + "12"
+    fout = output_dir_path + \
+      str_join((/"OBS", obsname, type, version + "-gridbox-average-noprecip", \
+                 mip, outvar(ivar), datestr/), "_") + ".nc"
+    ; write variable
+    write_nc(fout, outvar(ivar), output, bounds, gAtt)
+    delete(output)
+    delete(gAtt)
+    end do  ; loop over implemented 2-dim variables (lwp, iwp)
   end do  ; loop over years
 
 end
