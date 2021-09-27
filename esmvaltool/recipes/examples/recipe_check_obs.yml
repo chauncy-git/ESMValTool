@@ -53,8 +53,8 @@ diagnostics:
   CloudSat-level2:
     description: CloudSat-level2 check
     variables:
+      clivi:
       clw:
-      iwp:
       lwp:
     additional_datasets:
       - {dataset: CloudSat-level2, project: OBS, tier: 2, type: sat,
